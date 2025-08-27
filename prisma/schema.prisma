@@ -1,0 +1,303 @@
+// Prisma Schema para Ordo - Sistema Individual de Restaurantes
+// ⚠️ CRÍTICO: Este es el ÚNICO schema de Prisma en el proyecto
+// NO crear esquemas duplicados en otras carpetas
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== ENUMS =====
+
+enum StaffRole {
+  ADMIN
+  KITCHEN
+  WAITER
+  CASHIER
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEOUT
+  DELIVERY
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+// ===== CORE MODELS =====
+
+// Usuarios unificados (para autenticación)
+model User {
+  id       String @id @default(cuid())
+  email    String @unique
+  name     String
+  password String? // Hasheado
+  phone    String?
+  role     String @default("CUSTOMER") // CUSTOMER, ADMIN, KITCHEN, WAITER, CASHIER
+  isActive Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// Configuración del restaurante (registro único)
+model RestaurantConfig {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  
+  // Información de contacto
+  contactInfo Json // { phone, email, whatsapp }
+  address     Json // { street, neighborhood, city, state, postal_code, coordinates }
+  
+  // Configuración operativa
+  openingHours Json // { monday: { open, close, is_closed }, ... }
+  services     Json // { dine_in, takeout, delivery, reservations }
+  deliveryConfig Json? // { fee, minimum_order, delivery_radius_km, estimated_time_minutes }
+  
+  // Branding personalizado
+  branding Json // { primary_color, secondary_color, logo_url, favicon_url, cover_image_url, custom_domain }
+  
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("restaurant_config")
+}
+
+// Staff/usuarios del restaurante
+model StaffUser {
+  id       String    @id @default(cuid())
+  email    String    @unique
+  name     String
+  role     StaffRole
+  phone    String?
+  isActive Boolean   @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("staff_users")
+}
+
+// Clientes del restaurante
+model Customer {
+  id          String @id @default(cuid())
+  phone       String @unique // Identificador principal
+  name        String?
+  email       String?
+  addresses   Json[] // Múltiples direcciones
+  preferences Json?  // Alérgenos, notas especiales
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  orders       Order[]
+  reservations Reservation[]
+
+  @@map("customers")
+}
+
+// ===== MENÚ =====
+
+// Categorías del menú
+model MenuCategory {
+  id          String @id @default(cuid())
+  name        String
+  description String?
+  sortOrder   Int    @default(0)
+  isActive    Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  menuItems MenuItem[]
+
+  @@map("menu_categories")
+}
+
+// Items del menú
+model MenuItem {
+  id          String  @id @default(cuid())
+  categoryId  String
+  name        String
+  description String?
+  price       Decimal @db.Decimal(10, 2)
+  imageUrls   String[] // Múltiples imágenes
+  
+  // Estado y características
+  isAvailable           Boolean @default(true)
+  isFeatured           Boolean @default(false)
+  preparationTimeMinutes Int    @default(15)
+  
+  // Información nutricional
+  ingredients  String[]
+  allergens    String[]
+  dietaryInfo  Json? // { vegetarian, vegan, gluten_free, spicy_level }
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  category   MenuCategory   @relation(fields: [categoryId], references: [id])
+  modifiers  ItemModifier[]
+  orderItems OrderItem[]
+
+  @@map("menu_items")
+}
+
+// Modificadores/extras para items del menú
+model ItemModifier {
+  id              String  @id @default(cuid())
+  menuItemId      String
+  name            String
+  priceAdjustment Decimal @default(0) @db.Decimal(10, 2)
+  isRequired      Boolean @default(false)
+  options         Json?   // Para selecciones múltiples
+  
+  // Relaciones
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("item_modifiers")
+}
+
+// ===== PEDIDOS =====
+
+// Pedidos principales
+model Order {
+  id          String      @id @default(cuid())
+  orderNumber String      @unique // Auto-generado
+  customerId  String?
+  orderType   OrderType
+  status      OrderStatus @default(PENDING)
+  
+  // Montos
+  subtotal       Decimal @db.Decimal(10, 2)
+  taxAmount      Decimal @default(0) @db.Decimal(10, 2)
+  deliveryFee    Decimal @default(0) @db.Decimal(10, 2)
+  tipAmount      Decimal @default(0) @db.Decimal(10, 2)
+  discountAmount Decimal @default(0) @db.Decimal(10, 2)
+  total          Decimal @db.Decimal(10, 2)
+  
+  // Información del cliente
+  customerName    String?
+  customerPhone   String?
+  deliveryAddress Json?
+  tableNumber     Int?
+  
+  specialInstructions String?
+  
+  // Tiempos
+  estimatedReadyTime DateTime?
+  readyAt           DateTime?
+  deliveredAt       DateTime?
+  
+  // Pago
+  paymentMethod    String? // cash, card, transfer
+  paymentStatus    PaymentStatus @default(PENDING)
+  paymentReference String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  customer   Customer?   @relation(fields: [customerId], references: [id])
+  orderItems OrderItem[]
+
+  @@map("orders")
+}
+
+// Items individuales del pedido
+model OrderItem {
+  id                   String  @id @default(cuid())
+  orderId              String
+  menuItemId           String
+  quantity             Int
+  unitPrice            Decimal @db.Decimal(10, 2)
+  totalPrice           Decimal @db.Decimal(10, 2)
+  specialInstructions  String?
+  modifiers            Json? // Modificadores aplicados con precios
+  
+  // Relaciones
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("order_items")
+}
+
+// ===== RESERVAS =====
+
+// Sistema de reservas
+model Reservation {
+  id              String            @id @default(cuid())
+  customerId      String?
+  customerName    String
+  customerPhone   String
+  reservationDate DateTime          @db.Date
+  reservationTime DateTime          @db.Time
+  partySize       Int
+  status          ReservationStatus @default(PENDING)
+  
+  tablePreferences String? // Terraza, ventana, etc.
+  specialRequests  String?
+  notes           String? // Notas internas del staff
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relaciones
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@map("reservations")
+}
+
+// ===== MESAS (Opcional) =====
+
+// Gestión de mesas para restaurantes con reservas
+model Table {
+  id           String  @id @default(cuid())
+  tableNumber  String
+  capacity     Int
+  location     String? // interior, terraza, barra
+  isActive     Boolean @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("tables")
+}
